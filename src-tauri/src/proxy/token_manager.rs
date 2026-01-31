@@ -1354,17 +1354,26 @@ impl TokenManager {
     ) -> bool {
         // 1. 从 tokens 中获取该账号的 access_token
         // [FIX] 支持通过 email 或 account_id 查找，修复 429 时无法刷新配额的问题
-        let access_token = {
-            let mut found_token: Option<String> = None;
+        let (access_token, match_type) = {
+            let mut found: Option<(String, &str)> = None;
             for entry in self.tokens.iter() {
-                // 同时支持 email 和 account_id 匹配
-                if entry.value().email == identifier || entry.value().account_id == identifier {
-                    found_token = Some(entry.value().access_token.clone());
+                if entry.value().account_id == identifier {
+                    found = Some((entry.value().access_token.clone(), "account_id"));
+                    break;
+                } else if entry.value().email == identifier {
+                    found = Some((entry.value().access_token.clone(), "email"));
                     break;
                 }
             }
-            found_token
+            match found {
+                Some((token, match_type)) => (Some(token), Some(match_type)),
+                None => (None, None),
+            }
         };
+
+        if let Some(mt) = match_type {
+            tracing::info!("[FIX-429] 通过 {} 找到账号 token (identifier: {})", mt, identifier);
+        }
         
         let access_token = match access_token {
             Some(t) => t,
