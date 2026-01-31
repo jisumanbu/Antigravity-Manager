@@ -1348,15 +1348,17 @@ impl TokenManager {
     /// - `model`: 可选的模型名称,用于模型级别限流
     pub async fn fetch_and_lock_with_realtime_quota(
         &self,
-        email: &str,
+        identifier: &str,  // 可以是 email 或 account_id
         reason: crate::proxy::rate_limit::RateLimitReason,
         model: Option<String>,
     ) -> bool {
         // 1. 从 tokens 中获取该账号的 access_token
+        // [FIX] 支持通过 email 或 account_id 查找，修复 429 时无法刷新配额的问题
         let access_token = {
             let mut found_token: Option<String> = None;
             for entry in self.tokens.iter() {
-                if entry.value().email == email {
+                // 同时支持 email 和 account_id 匹配
+                if entry.value().email == identifier || entry.value().account_id == identifier {
                     found_token = Some(entry.value().access_token.clone());
                     break;
                 }
@@ -1367,14 +1369,14 @@ impl TokenManager {
         let access_token = match access_token {
             Some(t) => t,
             None => {
-                tracing::warn!("无法找到账号 {} 的 access_token,无法实时刷新配额", email);
+                tracing::warn!("无法找到账号 {} 的 access_token,无法实时刷新配额", identifier);
                 return false;
             }
         };
-        
+
         // 2. 调用配额刷新 API
-        tracing::info!("账号 {} 正在实时刷新配额...", email);
-        match crate::modules::quota::fetch_quota(&access_token, email).await {
+        tracing::info!("账号 {} 正在实时刷新配额...", identifier);
+        match crate::modules::quota::fetch_quota(&access_token, identifier).await {
             Ok((quota_data, _project_id)) => {
                 // 3. 从最新配额中提取 reset_time
                 let earliest_reset = quota_data.models.iter()
@@ -1390,16 +1392,16 @@ impl TokenManager {
                 if let Some(reset_time_str) = earliest_reset {
                     tracing::info!(
                         "账号 {} 实时配额刷新成功,reset_time: {}",
-                        email, reset_time_str
+                        identifier, reset_time_str
                     );
-                    self.rate_limit_tracker.set_lockout_until_iso(email, reset_time_str, reason, model)
+                    self.rate_limit_tracker.set_lockout_until_iso(identifier, reset_time_str, reason, model)
                 } else {
-                    tracing::warn!("账号 {} 配额刷新成功但未找到 reset_time", email);
+                    tracing::warn!("账号 {} 配额刷新成功但未找到 reset_time", identifier);
                     false
                 }
             },
             Err(e) => {
-                tracing::warn!("账号 {} 实时配额刷新失败: {:?}", email, e);
+                tracing::warn!("账号 {} 实时配额刷新失败: {:?}", identifier, e);
                 false
             }
         }
